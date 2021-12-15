@@ -1,0 +1,11 @@
+apiVersion: aspool.nddr.yndd.io/v1alpha1
+kind: AsPool
+metadata:
+  name: aspool-default
+  namespace: default
+spec:
+  as-pool:
+    name: default
+    description: default AS pool
+    start: 65000
+    end: 65099
