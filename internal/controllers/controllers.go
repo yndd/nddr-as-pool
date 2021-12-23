@@ -20,6 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
+	"github.com/yndd/nddr-as-pool/internal/controllers/alloc"
 	"github.com/yndd/nddr-as-pool/internal/controllers/aspool"
 	"github.com/yndd/nddr-as-pool/internal/shared"
 )
@@ -28,6 +29,7 @@ import (
 func Setup(mgr ctrl.Manager, option controller.Options, nddcopts *shared.NddControllerOptions) error {
 	for _, setup := range []func(ctrl.Manager, controller.Options, *shared.NddControllerOptions) error{
 		aspool.Setup,
+		alloc.Setup,
 	} {
 		if err := setup(mgr, option, nddcopts); err != nil {
 			return err

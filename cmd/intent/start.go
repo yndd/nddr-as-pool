@@ -35,6 +35,7 @@ import (
 	"github.com/yndd/ndd-runtime/pkg/ratelimiter"
 
 	"github.com/yndd/nddr-as-pool/internal/controllers"
+	"github.com/yndd/nddr-as-pool/internal/rpool"
 
 	//"github.com/yndd/nddr-as-pool/internal/applogic"
 
@@ -85,6 +86,7 @@ var startCmd = &cobra.Command{
 			Logger:    logging.NewLogrLogger(zlog.WithName("aspool")),
 			Poll:      pollInterval,
 			Namespace: namespace,
+			Pool:      make(map[string]rpool.Pool),
 		}
 
 		// initialize controllers

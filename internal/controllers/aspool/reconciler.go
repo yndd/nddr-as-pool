@@ -62,6 +62,7 @@ const (
 	reasonCannotDeleteFInalizer event.Reason = "CannotDeleteFinalizer"
 	reasonCannotInitialize      event.Reason = "CannotInitializeResource"
 	reasonCannotGetAllocations  event.Reason = "CannotGetAllocations"
+	reasonAppLogicFailed        event.Reason = "ApplogicFailed"
 	reasonCannotGarbageCollect  event.Reason = "CannotGarbageCollect"
 )
 
@@ -96,6 +97,12 @@ func WithNewAsPoolFn(f func() aspoolv1alpha1.Ap) ReconcilerOption {
 	}
 }
 
+func WithPool(t map[string]rpool.Pool) ReconcilerOption {
+	return func(r *Reconciler) {
+		r.pool = t
+	}
+}
+
 // WithRecorder specifies how the Reconciler should record Kubernetes events.
 func WithRecorder(er event.Recorder) ReconcilerOption {
 	return func(r *Reconciler) {
@@ -117,13 +124,13 @@ func Setup(mgr ctrl.Manager, o controller.Options, nddcopts *shared.NddControlle
 	r := NewReconciler(mgr,
 		WithLogger(nddcopts.Logger.WithValues("controller", name)),
 		WithNewAsPoolFn(ap),
+		WithPool(nddcopts.Pool),
 		WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
 	)
 
 	allocHandler := &EnqueueRequestForAllAllocations{
 		client: mgr.GetClient(),
 		log:    nddcopts.Logger,
-		pool:   r.pool,
 		ctx:    context.Background(),
 	}
 
@@ -176,6 +183,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	record := r.record.WithAnnotations("name", cr.GetAnnotations()[cr.GetName()])
 
+	treename := strings.Join([]string{cr.GetNamespace(), cr.GetName()}, "/")
+
 	// initialize the status
 	if meta.WasDeleted(cr) {
 		log = log.WithValues("deletion-timestamp", cr.GetDeletionTimestamp())
@@ -184,7 +193,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			record.Event(cr, event.Normal(reasonCannotDelete, "allocations present"))
 			log.Debug("Allocations present we cannot delete the as pool")
 
-			if err := r.GarbageCollection(ctx, cr); err != nil {
+			if _, ok := r.pool[treename]; !ok {
+				r.log.Debug("AS pool/tree init", "treename", treename)
+				r.pool[treename] = rpool.New(cr.GetStart(), cr.GetEnd(), cr.GetAllocationStrategy())
+			}
+
+			if err := r.GarbageCollection(ctx, cr, treename); err != nil {
 				record.Event(cr, event.Warning(reasonCannotGarbageCollect, err))
 				log.Debug("Cannot perform garbage collection", "error", err)
 				cr.SetConditions(nddv1.ReconcileError(err), aspoolv1alpha1.NotReady())
@@ -231,10 +245,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{Requeue: true}, errors.Wrap(r.client.Status().Update(ctx, cr), errUpdateStatus)
 	}
 
-	if _, ok := r.pool[req.NamespacedName.String()]; !ok {
-		r.pool[req.NamespacedName.String()] = rpool.New(cr.GetStart(), cr.GetEnd(), cr.GetAllocationStrategy())
-	}
-
 	// initialize resource
 	if err := cr.InitializeResource(); err != nil {
 		record.Event(cr, event.Warning(reasonCannotInitialize, err))
@@ -243,7 +253,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{Requeue: true}, errors.Wrap(r.client.Status().Update(ctx, cr), errUpdateStatus)
 	}
 
-	if err := r.GarbageCollection(ctx, cr); err != nil {
+	if err := r.handleAppLogic(ctx, cr, treename); err != nil {
+		record.Event(cr, event.Warning(reasonAppLogicFailed, err))
+		log.Debug("handle applogic failed", "error", err)
+		cr.SetConditions(nddv1.ReconcileError(err), aspoolv1alpha1.NotReady())
+		return reconcile.Result{RequeueAfter: shortWait}, errors.Wrap(r.client.Status().Update(ctx, cr), errUpdateStatus)
+	}
+
+	if err := r.GarbageCollection(ctx, cr, treename); err != nil {
 		record.Event(cr, event.Warning(reasonCannotGarbageCollect, err))
 		log.Debug("Cannot perform garbage collection", "error", err)
 		cr.SetConditions(nddv1.ReconcileError(err), aspoolv1alpha1.NotReady())
@@ -254,7 +271,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	return reconcile.Result{RequeueAfter: reconcileTimeout}, errors.Wrap(r.client.Status().Update(ctx, cr), errUpdateStatus)
 }
 
-func (r *Reconciler) GarbageCollection(ctx context.Context, cr aspoolv1alpha1.Ap) error {
+func (r *Reconciler) handleAppLogic(ctx context.Context, cr aspoolv1alpha1.Ap, treename string) error {
+	// initialize the pool
+	if _, ok := r.pool[treename]; !ok {
+		r.log.Debug("AS pool/tree init", "treename", treename)
+		r.pool[treename] = rpool.New(cr.GetStart(), cr.GetEnd(), cr.GetAllocationStrategy())
+	}
+
+	return nil
+}
+
+func (r *Reconciler) GarbageCollection(ctx context.Context, cr aspoolv1alpha1.Ap, treename string) error {
 	log := r.log.WithValues("function", "garbageCollection", "Name", cr.GetName())
 	//log.Debug("entry")
 	// get all allocations
@@ -264,9 +291,9 @@ func (r *Reconciler) GarbageCollection(ctx context.Context, cr aspoolv1alpha1.Ap
 		return err
 	}
 
-	aspoolname := cr.GetName()
-	namespace := cr.GetNamespace()
-	poolname := strings.Join([]string{namespace, aspoolname}, "/")
+	poolname := cr.GetName()
+	//namespace := cr.GetNamespace()
+	//poolname := strings.Join([]string{namespace, aspoolname}, "/")
 
 	// check if allocations dont have AS allocated
 	// check if allocations match with allocated pool
@@ -276,12 +303,12 @@ func (r *Reconciler) GarbageCollection(ctx context.Context, cr aspoolv1alpha1.Ap
 	allocAses := make([]*uint32, 0)
 	for _, alloc := range alloc.Items {
 		// only garbage collect if the pool matches
-		if alloc.GetAsPoolName() == aspoolname {
+		if alloc.GetAsPoolName() == poolname {
 			allocAs, allocAsFound := alloc.HasAs()
 			if !allocAsFound {
-				log.Debug("Alloc", "Pool", aspoolname, "Name", alloc.GetName(), "AS found", allocAsFound)
+				log.Debug("Alloc", "Pool", poolname, "Name", alloc.GetName(), "AS found", allocAsFound)
 			} else {
-				log.Debug("Alloc", "Pool", aspoolname, "Name", alloc.GetName(), "AS found", allocAsFound, "allocAS", allocAs)
+				log.Debug("Alloc", "Pool", poolname, "Name", alloc.GetName(), "AS found", allocAsFound, "allocAS", allocAs)
 			}
 
 			// the selector is used in the pool to find the entry in the pool
@@ -312,14 +339,14 @@ func (r *Reconciler) GarbageCollection(ctx context.Context, cr aspoolv1alpha1.Ap
 						log.Debug("index conversion failed")
 						return err
 					}
-					ases = r.pool[poolname].QueryByIndex(idx)
+					ases = r.pool[treename].QueryByIndex(idx)
 				} else {
 					log.Debug("when allocation strategy is deterministic a valid index as selector needs to be assigned in the spec")
 					return errors.New("when allocation strategy is deterministic a valid index as selector needs to be assigned in the spec")
 				}
 			default:
 				// first available allocation strategy
-				ases = r.pool[poolname].QueryByLabels(selector)
+				ases = r.pool[treename].QueryByLabels(selector)
 			}
 
 			if len(ases) == 0 {
@@ -331,34 +358,34 @@ func (r *Reconciler) GarbageCollection(ctx context.Context, cr aspoolv1alpha1.Ap
 					switch cr.GetAllocationStrategy() {
 					case "deterministic":
 						log.Debug("strange: With a determinsitic allocation the as should always be found")
-						as, ok = r.pool[poolname].Allocate(utils.Uint32Ptr(uint32(idx)), sourcetags)
+						as, ok = r.pool[treename].Allocate(utils.Uint32Ptr(uint32(idx)), sourcetags)
 					default:
-						as, ok = r.pool[poolname].Allocate(&allocAs, sourcetags)
+						as, ok = r.pool[treename].Allocate(&allocAs, sourcetags)
 					}
 					log.Debug("strange situation: query not found in pool, but alloc has an AS (can happen during startup/restart)", "allocAS", allocAs, "new AS", as)
 				} else {
 					switch cr.GetAllocationStrategy() {
 					case "deterministic":
 						log.Debug("strange: With a determinsitic allocation the as should always be found")
-						as, ok = r.pool[poolname].Allocate(utils.Uint32Ptr(uint32(idx)), sourcetags)
+						as, ok = r.pool[treename].Allocate(utils.Uint32Ptr(uint32(idx)), sourcetags)
 					default:
-						as, ok = r.pool[poolname].Allocate(nil, sourcetags)
+						as, ok = r.pool[treename].Allocate(nil, sourcetags)
 					}
 				}
 				if !ok {
 					log.Debug("pool allocation failed")
 					return errors.New("Pool allocation failed")
 				}
-				alloc.SetAs(as)
+				//alloc.SetAs(as)
 				// find AS in the used list in the aspool resource
 				if !cr.FindAs(as) {
-					cr.SetAs(as)
+					//cr.SetAs(as)
 				} else {
 					log.Debug("strange situation, query not found in pool, but AS was found in used allocations (can happen during startup/restart) ")
 				}
-				if err := r.client.Status().Update(ctx, &alloc); err != nil {
-					log.Debug("updating alloc status", "error", err)
-				}
+				//if err := r.client.Status().Update(ctx, &alloc); err != nil {
+				//	log.Debug("updating alloc status", "error", err)
+				//}
 
 			} else {
 				// label/selector found in the pool
@@ -371,16 +398,16 @@ func (r *Reconciler) GarbageCollection(ctx context.Context, cr aspoolv1alpha1.Ap
 				switch {
 				case !allocAsFound:
 					log.Debug("strange situation, AS found in pool but alloc AS not found")
-					alloc.SetAs(as)
-					if err := r.client.Status().Update(ctx, &alloc); err != nil {
-						log.Debug("updating alloc status", "error", err)
-					}
+					//alloc.SetAs(as)
+					//if err := r.client.Status().Update(ctx, &alloc); err != nil {
+					//	log.Debug("updating alloc status", "error", err)
+					//}
 				case allocAsFound && as != allocAs:
 					log.Debug("strange situation, AS found in pool but alloc AS had different AS", "pool AS", as, "alloc AS", allocAs)
-					alloc.SetAs(as)
-					if err := r.client.Status().Update(ctx, &alloc); err != nil {
-						log.Debug("updating alloc status", "error", err)
-					}
+					//alloc.SetAs(as)
+					//if err := r.client.Status().Update(ctx, &alloc); err != nil {
+					//	log.Debug("updating alloc status", "error", err)
+					//}
 				default:
 					// do nothing, all ok
 				}
@@ -391,7 +418,7 @@ func (r *Reconciler) GarbageCollection(ctx context.Context, cr aspoolv1alpha1.Ap
 	// based on the allocated ASes we collected before we can validate if the
 	// pool had assigned other allocations
 	found := false
-	for _, pAs := range r.pool[poolname].GetAllocated() {
+	for _, pAs := range r.pool[treename].GetAllocated() {
 		for _, allocAs := range allocAses {
 			if *allocAs == pAs {
 				found = true
@@ -400,7 +427,7 @@ func (r *Reconciler) GarbageCollection(ctx context.Context, cr aspoolv1alpha1.Ap
 		}
 		if !found {
 			log.Debug("as found in pool, but no alloc found -> deallocate from pool", "as", pAs)
-			r.pool[poolname].DeAllocate(pAs)
+			r.pool[treename].DeAllocate(pAs)
 		}
 	}
 	// always update the status field in the aspool with the latest info

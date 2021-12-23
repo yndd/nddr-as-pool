@@ -20,7 +20,26 @@ import (
 
 	nddv1 "github.com/yndd/ndd-runtime/apis/common/v1"
 	"github.com/yndd/ndd-runtime/pkg/resource"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var _ AaList = &AllocList{}
+
+// +k8s:deepcopy-gen=false
+type AaList interface {
+	client.ObjectList
+
+	GetAllocs() []Aa
+}
+
+func (x *AllocList) GetAllocs() []Aa {
+	allocs := make([]Aa, len(x.Items))
+	for i, r := range x.Items {
+		r := r // Pin range variable so we can take its address.
+		allocs[i] = &r
+	}
+	return allocs
+}
 
 var _ Aa = &Alloc{}
 
@@ -28,6 +47,14 @@ var _ Aa = &Alloc{}
 type Aa interface {
 	resource.Object
 	resource.Conditioned
+
+	GetCondition(ct nddv1.ConditionKind) nddv1.Condition
+	SetConditions(c ...nddv1.Condition)
+	GetAsPoolName() string
+	GetSourceTag() map[string]string
+	GetSelector() map[string]string
+	SetAs(as uint32)
+	HasAs() (uint32, bool)
 }
 
 // GetCondition of this Network Node.
@@ -42,7 +69,7 @@ func (x *Alloc) SetConditions(c ...nddv1.Condition) {
 
 func (n *Alloc) GetAsPoolName() string {
 	if reflect.ValueOf(n.Spec.AsPoolName).IsZero() {
-		return "enabale"
+		return ""
 	}
 	return *n.Spec.AsPoolName
 }

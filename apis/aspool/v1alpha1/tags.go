@@ -13,18 +13,4 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-package shared
-
-import (
-	"time"
-
-	"github.com/yndd/ndd-runtime/pkg/logging"
-	"github.com/yndd/nddr-as-pool/internal/rpool"
-)
-
-type NddControllerOptions struct {
-	Logger    logging.Logger
-	Poll      time.Duration
-	Namespace string
-	Pool      map[string]rpool.Pool
-}
+package v1alpha1
