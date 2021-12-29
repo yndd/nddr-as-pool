@@ -183,7 +183,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	record := r.record.WithAnnotations("name", cr.GetAnnotations()[cr.GetName()])
 
-	treename := strings.Join([]string{cr.GetNamespace(), cr.GetName()}, "/")
+	treename := strings.Join([]string{cr.GetNamespace(), cr.GetName()}, ".")
 
 	// initialize the status
 	if meta.WasDeleted(cr) {
@@ -278,6 +278,10 @@ func (r *Reconciler) handleAppLogic(ctx context.Context, cr aspoolv1alpha1.Ap, t
 		r.pool[treename] = rpool.New(cr.GetStart(), cr.GetEnd(), cr.GetAllocationStrategy())
 	}
 
+	cr.SetOrganizationName(cr.GetOrganizationName())
+	cr.SetDeploymentName(cr.GetDeploymentName())
+	cr.SetAsPoolName(cr.GetAsPoolName())
+
 	return nil
 }
 
@@ -302,8 +306,10 @@ func (r *Reconciler) GarbageCollection(ctx context.Context, cr aspoolv1alpha1.Ap
 	// we keep track of the allocated ASes to compare in a second stage
 	allocAses := make([]*uint32, 0)
 	for _, alloc := range alloc.Items {
+		allocpoolName := strings.Join(strings.Split(alloc.GetName(), ".")[:len(strings.Split(alloc.GetName(), "."))-1], ".")
 		// only garbage collect if the pool matches
-		if alloc.GetAsPoolName() == poolname {
+		log.Debug("Alloc PoolName comparison", "AS Pool Name", poolname, "Alloc Pool Name", allocpoolName)
+		if allocpoolName == poolname {
 			allocAs, allocAsFound := alloc.HasAs()
 			if !allocAsFound {
 				log.Debug("Alloc", "Pool", poolname, "Name", alloc.GetName(), "AS found", allocAsFound)

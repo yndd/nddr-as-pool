@@ -76,7 +76,8 @@ type Reconciler struct {
 	record  event.Recorder
 	managed mrManaged
 
-	newAlloc func() aspoolv1alpha1.Aa
+	newAlloc  func() aspoolv1alpha1.Aa
+	newAsPool func() aspoolv1alpha1.Ap
 
 	pool map[string]rpool.Pool
 }
@@ -95,6 +96,12 @@ func WithLogger(log logging.Logger) ReconcilerOption {
 func WithNewReourceFn(f func() aspoolv1alpha1.Aa) ReconcilerOption {
 	return func(r *Reconciler) {
 		r.newAlloc = f
+	}
+}
+
+func WithNewAsPoolFn(f func() aspoolv1alpha1.Ap) ReconcilerOption {
+	return func(r *Reconciler) {
+		r.newAsPool = f
 	}
 }
 
@@ -121,10 +128,12 @@ func defaultMRManaged(m ctrl.Manager) mrManaged {
 func Setup(mgr ctrl.Manager, o controller.Options, nddcopts *shared.NddControllerOptions) error {
 	name := "nddr/" + strings.ToLower(aspoolv1alpha1.AllocGroupKind)
 	fn := func() aspoolv1alpha1.Aa { return &aspoolv1alpha1.Alloc{} }
+	asfn := func() aspoolv1alpha1.Ap { return &aspoolv1alpha1.AsPool{} }
 
 	r := NewReconciler(mgr,
 		WithLogger(nddcopts.Logger.WithValues("controller", name)),
 		WithNewReourceFn(fn),
+		WithNewAsPoolFn(asfn),
 		WithPool(nddcopts.Pool),
 		WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
 	)
@@ -175,17 +184,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	record := r.record.WithAnnotations("name", cr.GetAnnotations()[cr.GetName()])
 
-	treename := strings.Join([]string{cr.GetNamespace(), cr.GetAsPoolName()}, "/")
+	allocpoolName := strings.Join(strings.Split(cr.GetName(), ".")[:len(strings.Split(cr.GetName(), "."))-1], ".")
+	crName := strings.Join([]string{cr.GetNamespace(), allocpoolName}, ".")
 
-	log.Debug("TreeName", "Name", treename)
+	log.Debug("crName", "Name", crName)
 
 	if meta.WasDeleted(cr) {
 		log = log.WithValues("deletion-timestamp", cr.GetDeletionTimestamp())
 
 		// check allocations
-		if _, ok := r.pool[treename]; ok {
+		if _, ok := r.pool[crName]; ok {
 			if as, ok := cr.HasAs(); ok {
-				r.pool[treename].DeAllocate(as)
+				r.pool[crName].DeAllocate(as)
 			}
 		}
 
@@ -227,7 +237,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 	*/
 
-	if err := r.handleAppLogic(ctx, cr, treename); err != nil {
+	if err := r.handleAppLogic(ctx, cr, crName); err != nil {
 		record.Event(cr, event.Warning(reasonAppLogicFailed, err))
 		log.Debug("handle applogic failed", "error", err)
 		cr.SetConditions(nddv1.ReconcileError(err), aspoolv1alpha1.NotReady())
@@ -238,22 +248,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	return reconcile.Result{}, errors.Wrap(r.client.Status().Update(ctx, cr), errUpdateStatus)
 }
 
-func (r *Reconciler) handleAppLogic(ctx context.Context, cr aspoolv1alpha1.Aa, treename string) error {
+func (r *Reconciler) handleAppLogic(ctx context.Context, cr aspoolv1alpha1.Aa, crName string) error {
 	log := r.log.WithValues("name", cr.GetName())
 	log.Debug("handleAppLogic")
 	// get the ipam -> we need this mainly for parent status
-	aspool := &aspoolv1alpha1.AsPool{}
+	allocpoolName := strings.Join(strings.Split(cr.GetName(), ".")[:len(strings.Split(cr.GetName(), "."))-1], ".")
+
+	aspool := r.newAsPool()
 	if err := r.client.Get(ctx, types.NamespacedName{
 		Namespace: cr.GetNamespace(),
-		Name:      cr.GetAsPoolName()}, aspool); err != nil {
+		Name:      allocpoolName}, aspool); err != nil {
 		// can happen when the ipam is not found
 		log.Debug("Aspool not available")
 		return errors.Wrap(err, "Aspool not available")
 	}
 
-	if _, ok := r.pool[treename]; !ok {
-		log.Debug("AS pool/tree not ready", "treename", treename)
-		return errors.New(fmt.Sprintf("AS pool/tree not ready, treename: %s", treename))
+	if _, ok := r.pool[crName]; !ok {
+		log.Debug("AS pool/tree not ready", "crName", crName)
+		return errors.New(fmt.Sprintf("AS pool/tree not ready, crName: %s", crName))
 	}
 
 	// the selector is used in the pool to find the entry in the pool
@@ -282,28 +294,28 @@ func (r *Reconciler) handleAppLogic(ctx context.Context, cr aspoolv1alpha1.Aa, t
 			if err != nil {
 				log.Debug("index conversion failed")
 			}
-			ases = r.pool[treename].QueryByIndex(idx)
+			ases = r.pool[crName].QueryByIndex(idx)
 		} else {
 			log.Debug("when allocation strategy is deterministic a valid index as selector needs to be assigned in the spec")
 			return errors.New("when allocation strategy is deterministic a valid index as selector needs to be assigned in the spec")
 		}
 	default:
 		// first available allocation strategy
-		ases = r.pool[treename].QueryByLabels(selector)
+		ases = r.pool[crName].QueryByLabels(selector)
 	}
 
 	if len(ases) == 0 {
 		// label/selector not found in the pool -> allocate AS in pool
 		switch aspool.GetAllocationStrategy() {
 		case "deterministic":
-			if a, ok := r.pool[treename].Allocate(utils.Uint32Ptr(uint32(idx)), sourcetags); !ok {
+			if a, ok := r.pool[crName].Allocate(utils.Uint32Ptr(uint32(idx)), sourcetags); !ok {
 				log.Debug("pool allocation failed")
 				return errors.New("pool allocation failed")
 			} else {
 				as = a
 			}
 		default:
-			if a, ok := r.pool[treename].Allocate(nil, sourcetags); !ok {
+			if a, ok := r.pool[crName].Allocate(nil, sourcetags); !ok {
 				log.Debug("pool allocation failed")
 				return errors.New("pool allocation failed")
 			} else {
@@ -323,6 +335,9 @@ func (r *Reconciler) handleAppLogic(ctx context.Context, cr aspoolv1alpha1.Aa, t
 	// set the as in the alloc object
 	log.Debug("handleAppLogic allocated AS", "AS", as)
 	cr.SetAs(as)
+	cr.SetOrganizationName(cr.GetOrganizationName())
+	cr.SetDeploymentName(cr.GetDeploymentName())
+	cr.SetAsPoolName(cr.GetAsPoolName())
 
 	return nil
 

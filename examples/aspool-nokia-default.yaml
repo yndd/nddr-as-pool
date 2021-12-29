@@ -1,0 +1,11 @@
+apiVersion: aspool.nddr.yndd.io/v1alpha1
+kind: AsPool
+metadata:
+  name: nokia.default
+  namespace: default
+spec:
+  as-pool:
+    description: deterministic global AS pool
+    allocation-strategy: deterministic
+    start: 65100
+    end: 65199

@@ -17,6 +17,7 @@ package v1alpha1
 
 import (
 	"reflect"
+	"strings"
 
 	nddv1 "github.com/yndd/ndd-runtime/apis/common/v1"
 	"github.com/yndd/ndd-runtime/pkg/resource"
@@ -49,7 +50,9 @@ type Ap interface {
 	resource.Object
 	resource.Conditioned
 
-	GetPoolName() string
+	GetOrganizationName() string
+	GetDeploymentName() string
+	GetAsPoolName() string
 	GetAllocationStrategy() string
 	GetStart() uint32
 	GetEnd() uint32
@@ -60,6 +63,10 @@ type Ap interface {
 	UnSetAs(uint32)
 	UpdateAs([]*uint32)
 	FindAs(uint32) bool
+
+	SetOrganizationName(string)
+	SetDeploymentName(string)
+	SetAsPoolName(string)
 }
 
 // GetCondition of this Network Node.
@@ -72,48 +79,68 @@ func (x *AsPool) SetConditions(c ...nddv1.Condition) {
 	x.Status.SetConditions(c...)
 }
 
-func (n *AsPool) GetPoolName() string {
-	if reflect.ValueOf(n.Spec.AspoolAsPool.Name).IsZero() {
+func (x *AsPool) GetOrganizationName() string {
+	split := strings.Split(x.GetName(), ".")
+	if len(split) >= 2 {
+		return split[0]
+	}
+	return ""
+}
+
+func (x *AsPool) GetDeploymentName() string {
+	split := strings.Split(x.GetName(), ".")
+	if len(split) >= 3 {
+		return split[1]
+	}
+	return ""
+}
+
+func (x *AsPool) GetAsPoolName() string {
+	split := strings.Split(x.GetName(), ".")
+	if len(split) == 2 {
+		return split[1]
+	}
+	if len(split) >= 3 {
+		return split[2]
+	}
+	return ""
+}
+
+func (x *AsPool) GetAllocationStrategy() string {
+	if reflect.ValueOf(x.Spec.AspoolAsPool.AllocationStrategy).IsZero() {
 		return ""
 	}
-	return *n.Spec.AspoolAsPool.Name
+	return *x.Spec.AspoolAsPool.AllocationStrategy
 }
 
-func (n *AsPool) GetAllocationStrategy() string {
-	if reflect.ValueOf(n.Spec.AspoolAsPool.AllocationStrategy).IsZero() {
-		return ""
-	}
-	return *n.Spec.AspoolAsPool.AllocationStrategy
-}
-
-func (n *AsPool) GetStart() uint32 {
-	if reflect.ValueOf(n.Spec.AspoolAsPool.Start).IsZero() {
+func (x *AsPool) GetStart() uint32 {
+	if reflect.ValueOf(x.Spec.AspoolAsPool.Start).IsZero() {
 		return 0
 	}
-	return *n.Spec.AspoolAsPool.Start
+	return *x.Spec.AspoolAsPool.Start
 }
 
-func (n *AsPool) GetEnd() uint32 {
-	if reflect.ValueOf(n.Spec.AspoolAsPool.End).IsZero() {
+func (x *AsPool) GetEnd() uint32 {
+	if reflect.ValueOf(x.Spec.AspoolAsPool.End).IsZero() {
 		return 0
 	}
-	return *n.Spec.AspoolAsPool.End
+	return *x.Spec.AspoolAsPool.End
 }
 
-func (n *AsPool) GetAllocations() int {
-	if n.Status.AspoolAsPool != nil && n.Status.AspoolAsPool.State != nil {
-		return *n.Status.AspoolAsPool.State.Allocated
+func (x *AsPool) GetAllocations() int {
+	if x.Status.AspoolAsPool != nil && x.Status.AspoolAsPool.State != nil {
+		return *x.Status.AspoolAsPool.State.Allocated
 	}
 	return 0
 }
 
-func (n *AsPool) GetAllocatedAses() []*uint32 {
-	return n.Status.AspoolAsPool.State.Used
+func (x *AsPool) GetAllocatedAses() []*uint32 {
+	return x.Status.AspoolAsPool.State.Used
 }
 
-func (n *AsPool) InitializeResource() error {
-	start := int(n.GetStart())
-	end := int(n.GetEnd())
+func (x *AsPool) InitializeResource() error {
+	start := int(x.GetStart())
+	end := int(x.GetEnd())
 
 	//if start > end {
 	// something went wrong with the input
@@ -121,21 +148,20 @@ func (n *AsPool) InitializeResource() error {
 	//}
 
 	// check if the pool was already initialized
-	if n.Status.AspoolAsPool != nil && n.Status.AspoolAsPool.State != nil {
+	if x.Status.AspoolAsPool != nil && x.Status.AspoolAsPool.State != nil {
 		// pool was already initialiazed
 		return nil
 	}
 
-	n.Status.AspoolAsPool = &NddrAsPoolAsPool{
-		Name:        n.Spec.AspoolAsPool.Name,
-		Start:       n.Spec.AspoolAsPool.Start,
-		End:         n.Spec.AspoolAsPool.End,
-		AdminState:  n.Spec.AspoolAsPool.AdminState,
-		Description: n.Spec.AspoolAsPool.Description,
+	x.Status.AspoolAsPool = &NddrAsPoolAsPool{
+		Start:       x.Spec.AspoolAsPool.Start,
+		End:         x.Spec.AspoolAsPool.End,
+		AdminState:  x.Spec.AspoolAsPool.AdminState,
+		Description: x.Spec.AspoolAsPool.Description,
 		State: &NddrAsPoolAsPoolState{
-			Total:     utils.IntPtr(end - start),
+			Total:     utils.IntPtr(end - start + 1),
 			Allocated: utils.IntPtr(0),
-			Available: utils.IntPtr(end - start),
+			Available: utils.IntPtr(end - start + 1),
 			Used:      make([]*uint32, 0),
 		},
 	}
@@ -143,20 +169,20 @@ func (n *AsPool) InitializeResource() error {
 
 }
 
-func (n *AsPool) SetAs(as uint32) {
-	*n.Status.AspoolAsPool.State.Allocated++
-	*n.Status.AspoolAsPool.State.Available--
+func (x *AsPool) SetAs(as uint32) {
+	*x.Status.AspoolAsPool.State.Allocated++
+	*x.Status.AspoolAsPool.State.Available--
 
-	n.Status.AspoolAsPool.State.Used = append(n.Status.AspoolAsPool.State.Used, &as)
+	x.Status.AspoolAsPool.State.Used = append(x.Status.AspoolAsPool.State.Used, &as)
 }
 
-func (n *AsPool) UnSetAs(as uint32) {
-	*n.Status.AspoolAsPool.State.Allocated--
-	*n.Status.AspoolAsPool.State.Available++
+func (x *AsPool) UnSetAs(as uint32) {
+	*x.Status.AspoolAsPool.State.Allocated--
+	*x.Status.AspoolAsPool.State.Available++
 
 	found := false
 	idx := 0
-	for i, pas := range n.Status.AspoolAsPool.State.Used {
+	for i, pas := range x.Status.AspoolAsPool.State.Used {
 		if *pas == as {
 			found = true
 			idx = i
@@ -164,21 +190,33 @@ func (n *AsPool) UnSetAs(as uint32) {
 		}
 	}
 	if found {
-		n.Status.AspoolAsPool.State.Used = append(n.Status.AspoolAsPool.State.Used[:idx], n.Status.AspoolAsPool.State.Used[idx+1:]...)
+		x.Status.AspoolAsPool.State.Used = append(x.Status.AspoolAsPool.State.Used[:idx], x.Status.AspoolAsPool.State.Used[idx+1:]...)
 	}
 }
 
-func (n *AsPool) UpdateAs(allocatedAses []*uint32) {
-	*n.Status.AspoolAsPool.State.Available = *n.Status.AspoolAsPool.State.Total - len(allocatedAses)
-	*n.Status.AspoolAsPool.State.Allocated = len(allocatedAses)
-	n.Status.AspoolAsPool.State.Used = allocatedAses
+func (x *AsPool) UpdateAs(allocatedAses []*uint32) {
+	*x.Status.AspoolAsPool.State.Available = *x.Status.AspoolAsPool.State.Total - len(allocatedAses)
+	*x.Status.AspoolAsPool.State.Allocated = len(allocatedAses)
+	x.Status.AspoolAsPool.State.Used = allocatedAses
 }
 
-func (n *AsPool) FindAs(as uint32) bool {
-	for _, uas := range n.Status.AspoolAsPool.State.Used {
+func (x *AsPool) FindAs(as uint32) bool {
+	for _, uas := range x.Status.AspoolAsPool.State.Used {
 		if *uas == as {
 			return true
 		}
 	}
 	return false
+}
+
+func (x *AsPool) SetOrganizationName(s string) {
+	x.Status.OrganizationName = &s
+}
+
+func (x *AsPool) SetDeploymentName(s string) {
+	x.Status.DeploymentName = &s
+}
+
+func (x *AsPool) SetAsPoolName(s string) {
+	x.Status.AsPoolName = &s
 }

@@ -1,0 +1,15 @@
+apiVersion: aspool.nddr.yndd.io/v1alpha1
+kind: Alloc
+metadata:
+  name: nokia.region1.default.alloc10
+  namespace: default
+spec:
+  alloc:
+    selector:
+    - key: index
+      value: "10"
+    source-tag:
+    - key: node
+      value: leaf1
+    - key: network-instance
+      value: default

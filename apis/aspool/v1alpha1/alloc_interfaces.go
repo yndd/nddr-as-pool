@@ -17,6 +17,7 @@ package v1alpha1
 
 import (
 	"reflect"
+	"strings"
 
 	nddv1 "github.com/yndd/ndd-runtime/apis/common/v1"
 	"github.com/yndd/ndd-runtime/pkg/resource"
@@ -50,11 +51,17 @@ type Aa interface {
 
 	GetCondition(ct nddv1.ConditionKind) nddv1.Condition
 	SetConditions(c ...nddv1.Condition)
+	GetOrganizationName() string
+	GetDeploymentName() string
 	GetAsPoolName() string
 	GetSourceTag() map[string]string
 	GetSelector() map[string]string
 	SetAs(as uint32)
 	HasAs() (uint32, bool)
+
+	SetOrganizationName(string)
+	SetDeploymentName(string)
+	SetAsPoolName(string)
 }
 
 // GetCondition of this Network Node.
@@ -67,11 +74,31 @@ func (x *Alloc) SetConditions(c ...nddv1.Condition) {
 	x.Status.SetConditions(c...)
 }
 
-func (n *Alloc) GetAsPoolName() string {
-	if reflect.ValueOf(n.Spec.AsPoolName).IsZero() {
-		return ""
+func (x *Alloc) GetOrganizationName() string {
+	split := strings.Split(x.GetName(), ".")
+	if len(split) >= 2 {
+		return split[0]
 	}
-	return *n.Spec.AsPoolName
+	return ""
+}
+
+func (x *Alloc) GetDeploymentName() string {
+	split := strings.Split(x.GetName(), ".")
+	if len(split) >= 4 {
+		return split[1]
+	}
+	return ""
+}
+
+func (x *Alloc) GetAsPoolName() string {
+	split := strings.Split(x.GetName(), ".")
+	if len(split) == 3 {
+		return split[1]
+	}
+	if len(split) >= 4 {
+		return split[2]
+	}
+	return ""
 }
 
 func (n *Alloc) GetSourceTag() map[string]string {
@@ -111,5 +138,16 @@ func (n *Alloc) HasAs() (uint32, bool) {
 		return *n.Status.Alloc.State.As, true
 	}
 	return 0, false
+}
 
+func (x *Alloc) SetOrganizationName(s string) {
+	x.Status.OrganizationName = &s
+}
+
+func (x *Alloc) SetDeploymentName(s string) {
+	x.Status.DeploymentName = &s
+}
+
+func (x *Alloc) SetAsPoolName(s string) {
+	x.Status.AsPoolName = &s
 }

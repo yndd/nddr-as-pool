@@ -17,6 +17,7 @@ limitations under the License.
 package intent
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"strings"
@@ -39,6 +40,8 @@ import (
 
 	//"github.com/yndd/nddr-as-pool/internal/applogic"
 
+	aspoolv1alpha1 "github.com/yndd/nddr-as-pool/apis/aspool/v1alpha1"
+	"github.com/yndd/nddr-as-pool/internal/grpcserver"
 	"github.com/yndd/nddr-as-pool/internal/shared"
 	//+kubebuilder:scaffold:imports
 )
@@ -82,6 +85,15 @@ var startCmd = &cobra.Command{
 			return errors.Wrap(err, "Cannot create manager")
 		}
 
+		// assign gnmi address
+		var gnmiAddress string
+		if grpcQueryAddress != "" {
+			gnmiAddress = grpcQueryAddress
+		} else {
+			gnmiAddress = getGnmiServerAddress(podname)
+		}
+		zlog.Info("gnmi address", "address", gnmiAddress)
+
 		nddcopts := &shared.NddControllerOptions{
 			Logger:    logging.NewLogrLogger(zlog.WithName("aspool")),
 			Poll:      pollInterval,
@@ -92,6 +104,28 @@ var startCmd = &cobra.Command{
 		// initialize controllers
 		if err := controllers.Setup(mgr, nddCtlrOptions(concurrency), nddcopts); err != nil {
 			return errors.Wrap(err, "Cannot add nddo controllers to manager")
+		}
+
+		apfn := func() aspoolv1alpha1.Ap { return &aspoolv1alpha1.AsPool{} }
+		gs, err := grpcserver.New(
+			grpcserver.WithLogger(logging.NewLogrLogger(zlog.WithName("aspoolgrpcserver"))),
+			grpcserver.WithClient(mgr.GetClient()),
+			grpcserver.WithPool(nddcopts.Pool),
+			grpcserver.WithNewResourceFn(apfn),
+			grpcserver.WithConfig(
+				grpcserver.Config{
+					Address:    ":" + strconv.Itoa(pkgmetav1.GnmiServerPort),
+					SkipVerify: true,
+					InSecure:   true,
+				},
+			),
+		)
+		if err != nil {
+			return errors.Wrap(err, "unable to initialize server")
+		}
+
+		if err := gs.Run(context.Background()); err != nil {
+			return errors.Wrap(err, "unable to start grpc server")
 		}
 
 		// +kubebuilder:scaffold:builder

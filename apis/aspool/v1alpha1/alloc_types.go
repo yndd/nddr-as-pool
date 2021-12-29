@@ -20,6 +20,7 @@ import (
 	"reflect"
 
 	nddv1 "github.com/yndd/ndd-runtime/apis/common/v1"
+	nddov1 "github.com/yndd/nddo-runtime/apis/common/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -44,30 +45,22 @@ type NddrAllocState struct {
 
 // AspoolAlloc struct
 type AspoolAlloc struct {
-	Selector  []*AspoolAllocSelectorTag  `json:"selector,omitempty"`
-	SourceTag []*AspoolAllocSourceTagTag `json:"source-tag,omitempty"`
-}
-
-type AspoolAllocSelectorTag struct {
-	Key   *string `json:"key,omitempty"`
-	Value *string `json:"value,omitempty"`
-}
-
-type AspoolAllocSourceTagTag struct {
-	Key   *string `json:"key,omitempty"`
-	Value *string `json:"value,omitempty"`
+	Selector  []*nddov1.Tag `json:"selector,omitempty"`
+	SourceTag []*nddov1.Tag `json:"source-tag,omitempty"`
 }
 
 // A AllocSpec defines the desired state of a Alloc.
 type AllocSpec struct {
 	//nddv1.ResourceSpec `json:",inline"`
-	AsPoolName *string      `json:"as-pool-name,omitempty"`
-	Alloc      *AspoolAlloc `json:"alloc,omitempty"`
+	Alloc *AspoolAlloc `json:"alloc,omitempty"`
 }
 
 // A AllocStatus represents the observed state of a Alloc.
 type AllocStatus struct {
 	nddv1.ConditionedStatus `json:",inline"`
+	OrganizationName        *string          `json:"organization-name,omitempty"`
+	DeploymentName          *string          `json:"deployment-name,omitempty"`
+	AsPoolName              *string          `json:"as-pool-name,omitempty"`
 	Alloc                   *NddrAsPoolAlloc `json:"alloc,omitempty"`
 }
 
@@ -77,6 +70,9 @@ type AllocStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="SYNC",type="string",JSONPath=".status.conditions[?(@.kind=='Synced')].status"
 // +kubebuilder:printcolumn:name="STATUS",type="string",JSONPath=".status.conditions[?(@.kind=='Ready')].status"
+// +kubebuilder:printcolumn:name="ORG",type="string",JSONPath=".status.organization-name"
+// +kubebuilder:printcolumn:name="DEPL",type="string",JSONPath=".status.deployment-name"
+// +kubebuilder:printcolumn:name="POOL",type="string",JSONPath=".status.as-pool-name"
 // +kubebuilder:printcolumn:name="AS",type="string",JSONPath=".status.alloc.state.as",description="assigned AS"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 type Alloc struct {
